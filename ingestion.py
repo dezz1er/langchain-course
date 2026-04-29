@@ -2,7 +2,6 @@ import asyncio
 import os
 import ssl
 from typing import Any
-import uuid
 
 import certifi
 from dotenv import load_dotenv
@@ -10,11 +9,10 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_tavily import TavilyExtract, TavilyMap
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, List, PointStruct, VectorParams
-from fastembed import TextEmbedding
+from qdrant_client.models import Distance, VectorParams
 
 from logger import (Colors, log_error, log_info, log_success, log_header,log_warning)
 
@@ -24,18 +22,26 @@ load_dotenv()
 
 QDRANT_URL = "http://localhost:6333"
 COLLECTION_NAME = "langchain_docs"
-EMBEDDING_MODEL = "jinaai/jina-embeddings-v2-base-en"
+
 CHUNK_SIZE = 4000
-CHUNK_OVERLAP = 200
+CHUNK_OVERLAP = 400
+
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+EMBEDDING_DIM = 384
 
 tavily_extract = TavilyExtract()
 tavily_map = TavilyMap(max_depth=5, max_breadth=20, max_pages=1000)
 qdrant_client = QdrantClient(url=QDRANT_URL)
-embedding_model = TextEmbedding(model_name=EMBEDDING_MODEL)
 
-embeddings = FastEmbedEmbeddings(
+embeddings = HuggingFaceEmbeddings(
     model_name=EMBEDDING_MODEL,
+    model_kwargs={"device": "cpu"},
+    encode_kwargs={
+        "batch_size": 32,
+        "normalize_embeddings": True,
+    },
 )
+
 
 ssl_context = ssl.create_default_context(cafile=certifi.where())
 os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -49,9 +55,7 @@ def ensure_collection() -> None:
     """
     log_header("QDRANT COLLECTION INIT")
 
-    sample_vector = next(embedding_model.embed(["test vector"]))
-    vector_size = len(sample_vector)
-
+    vector_size = EMBEDDING_DIM
     collections = qdrant_client.get_collections().collections
     collection_names = {c.name for c in collections}
 
@@ -111,7 +115,7 @@ def to_documents(results: list[dict[str, Any]]) -> list[Document]:
     docs: list[Document] = []
 
     for item in results:
-        content = item.get("raw_content", "")
+        content = clean_text(item.get("raw_content", ""))
         url = item.get("url", "")
 
         if not content or len(content) < 200:
@@ -138,6 +142,7 @@ def chunk_documents(documents: list[Document]) -> list[Document]:
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
     )
+
     split_docs = text_splitter.split_documents(documents)
 
     log_success(
@@ -145,30 +150,25 @@ def chunk_documents(documents: list[Document]) -> list[Document]:
     )
     return split_docs
 
+import re
 
-def build_points(documents: list[Document]) -> list[PointStruct]:
-    """
-    Превращает LangChain Documents в points для Qdrant.
-    """
-    texts = [doc.page_content for doc in documents]
-    vectors = list(embedding_model.embed(texts))
+def clean_text(text: str) -> str:
+    # remove markdown ![...](...)
+    text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
 
-    points: list[PointStruct] = []
-    for doc, vector in zip(documents, vectors, strict=False):
-        payload = {
-            "text": doc.page_content,
-            **doc.metadata,
-        }
+    # remove links, keep text
+    text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
 
-        points.append(
-            PointStruct(
-                id=str(uuid.uuid4()),
-                vector=vector.tolist(),
-                payload=payload,
-            )
-        )
-    return points
+    # remove extra characters
+    text = re.sub(r"`{3,}.*?`{3,}", "", text, flags=re.DOTALL)
 
+    # remove single `code`
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+
+    # remove extra whitespace
+    text = re.sub(r"\n\s*\n", "\n\n", text)
+
+    return text.strip()
 
 async def index_documents_async(documents: list[Document], batch_size: int = 64) -> None:
     """
@@ -189,7 +189,7 @@ async def index_documents_async(documents: list[Document], batch_size: int = 64)
         f"of up to {batch_size} documents each"
     )
 
-    async def add_batch(batch: List[Document], batch_num: int) -> bool:
+    async def add_batch(batch: list[Document], batch_num: int) -> bool:
         try:
             await vectorstore.aadd_documents(batch)
             log_success(
