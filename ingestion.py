@@ -14,8 +14,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
-from logger import (Colors, log_error, log_info, log_success, log_header,log_warning)
-
+from logger import Colors, log_error, log_info, log_success, log_header, log_warning
 
 load_dotenv()
 
@@ -74,14 +73,13 @@ def ensure_collection() -> None:
         f"Qdrant: Collection '{COLLECTION_NAME}' created with vector size {vector_size}"
     )
 
+
 def filter_docs_urls(urls: list[str]) -> list[str]:
     """
     Оставляем только документацию LangChain (Python).
     """
-    return list({
-        url for url in urls
-        if "docs.langchain.com/oss/python" in url
-    })
+    return list({url for url in urls if "docs.langchain.com/oss/python" in url})
+
 
 def get_vectorstore() -> QdrantVectorStore:
     return QdrantVectorStore(
@@ -90,11 +88,10 @@ def get_vectorstore() -> QdrantVectorStore:
         embedding=embeddings,
     )
 
+
 def chunk_urls(urls: list[str], chunk_size: int = 5) -> list[list[str]]:
-    return [
-        urls[i:i + chunk_size]
-        for i in range(0, len(urls), chunk_size)
-    ]
+    return [urls[i : i + chunk_size] for i in range(0, len(urls), chunk_size)]
+
 
 async def extract_batch(urls: list[str], batch_num: int) -> list[dict[str, Any]]:
     try:
@@ -102,14 +99,13 @@ async def extract_batch(urls: list[str], batch_num: int) -> list[dict[str, Any]]
         res = await tavily_extract.ainvoke({"urls": urls})
         results = res.get("results", [])
 
-        log_success(
-            f"Batch {batch_num}: extracted {len(results)} pages"
-        )
+        log_success(f"Batch {batch_num}: extracted {len(results)} pages")
         return results
 
     except Exception as e:
         log_error(f"Batch {batch_num} failed: {e}")
         return []
+
 
 def to_documents(results: list[dict[str, Any]]) -> list[Document]:
     docs: list[Document] = []
@@ -129,6 +125,7 @@ def to_documents(results: list[dict[str, Any]]) -> list[Document]:
         )
 
     return docs
+
 
 def chunk_documents(documents: list[Document]) -> list[Document]:
     log_header("DOCUMENT CHUNKING PHASE")
@@ -150,7 +147,9 @@ def chunk_documents(documents: list[Document]) -> list[Document]:
     )
     return split_docs
 
+
 import re
+
 
 def clean_text(text: str) -> str:
     # remove markdown ![...](...)
@@ -170,7 +169,10 @@ def clean_text(text: str) -> str:
 
     return text.strip()
 
-async def index_documents_async(documents: list[Document], batch_size: int = 64) -> None:
+
+async def index_documents_async(
+    documents: list[Document], batch_size: int = 64
+) -> None:
     """
     Индексация документов в Qdrant батчами.
     Сам клиент синхронный, поэтому используем asyncio.to_thread.
@@ -182,7 +184,9 @@ async def index_documents_async(documents: list[Document], batch_size: int = 64)
     )
 
     vectorstore = get_vectorstore()
-    batches = [documents[i:i + batch_size] for i in range(0, len(documents), batch_size)]
+    batches = [
+        documents[i : i + batch_size] for i in range(0, len(documents), batch_size)
+    ]
 
     log_info(
         f"📦 Qdrant Indexing: Split into {len(batches)} batches "
@@ -198,9 +202,7 @@ async def index_documents_async(documents: list[Document], batch_size: int = 64)
             )
             return True
         except Exception as exc:
-            log_error(
-                f"VectorStore Indexing: Failed to add batch {batch_num} - {exc}"
-            )
+            log_error(f"VectorStore Indexing: Failed to add batch {batch_num} - {exc}")
             return False
 
     results = await asyncio.gather(
@@ -219,7 +221,6 @@ async def index_documents_async(documents: list[Document], batch_size: int = 64)
         log_warning(
             f"VectorStore Indexing: Processed {successful}/{len(batches)} batches successfully"
         )
-
 
 
 async def main() -> None:
@@ -248,10 +249,7 @@ async def main() -> None:
 
     log_info(f"Split into {len(url_batches)} batches")
 
-    tasks = [
-        extract_batch(batch, i + 1)
-        for i, batch in enumerate(url_batches)
-    ]
+    tasks = [extract_batch(batch, i + 1) for i, batch in enumerate(url_batches)]
 
     batch_results = await asyncio.gather(*tasks)
 
